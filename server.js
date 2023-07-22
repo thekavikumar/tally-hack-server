@@ -8,6 +8,12 @@ const io = require("socket.io")(server, {
 });
 
 const activeRooms = {};
+const userRoomMap = {};
+const userUsernameMap = {}; // Object to store the mapping of user socket IDs to usernames
+
+function getUsername(userId) {
+  return userUsernameMap[userId];
+}
 
 function createRoom(roomName) {
   if (!activeRooms[roomName]) {
@@ -25,6 +31,7 @@ function joinRoom(socket, roomName) {
     activeRooms[roomName].users[socket.id] = {
       username: "", // You can set the username later when the user sends their username
     };
+    roomId = roomName;
     socket.emit("roomJoined", roomName);
     emitUserList(roomName); // Emit the user list to all clients in the room
     socket.to(roomName).emit("userJoined", socket.id); // Emit "userJoined" event to other clients in the room
@@ -39,7 +46,13 @@ function emitUserList(roomName) {
   }
 }
 
+function getUserRoom(userId) {
+  // Get the room name for the given user ID from the userRoomMap object
+  return userRoomMap[userId];
+}
+
 io.on("connection", (socket) => {
+  let roomId;
   console.log("User connected");
   socket.emit("userId", socket.id);
   socket.on("createRoom", (roomName) => {
@@ -50,7 +63,9 @@ io.on("connection", (socket) => {
       socket.join(roomName);
       activeRooms[roomName][socket.id] = {
         username: "", // You can set the username later when the user sends their username
+        room: "",
       };
+      roomId = roomName;
       socket.emit("roomCreated", roomName);
       emitUserList(roomName); // Emit the user list to all clients in the room
       // Emit "roomCreated" event to the client
@@ -59,18 +74,37 @@ io.on("connection", (socket) => {
     }
   });
 
+  socket.on("setUsername", (username) => {
+    // Set the username for the user and store it in the userUsernameMap
+    activeUsers[socket.id].username = username;
+    userUsernameMap[socket.id] = username;
+
+    // Emit the userId and username back to the client
+    socket.emit("userId", socket.id);
+    socket.emit("username", username);
+  });
+
   socket.on("joinRoom", (roomName) => {
     joinRoom(socket, roomName);
   });
 
+  socket.on("progress", (progress) => {
+    // Broadcast the progress to all clients in the room
+    if (activeRooms[roomId]) {
+      io.to(roomId).emit("progress", {
+        userId: socket.id,
+        progress: progress,
+      });
+    }
+  });
+
   socket.on("disconnect", () => {
     console.log("User disconnected");
-    // Remove the disconnected user from all active rooms
-    for (const roomName in activeRooms) {
-      if (activeRooms[roomName].users[socket.id]) {
-        delete activeRooms[roomName].users[socket.id];
-        emitUserList(roomName); // Emit the updated user list to all clients in the room
-      }
+    // Remove the user from the active room when they disconnect
+    if (activeRooms[roomId] && activeRooms[roomId][socket.id]) {
+      delete activeRooms[roomId][socket.id];
+      // Broadcast the updated user list to all clients in the room
+      io.to(roomId).emit("userList", Object.keys(activeRooms[roomId]));
     }
   });
 });
